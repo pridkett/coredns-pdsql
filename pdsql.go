@@ -6,10 +6,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wenerme/coredns-pdsql/pdnsmodel"
 
 	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/pkg/dnsutil"
+	"github.com/coredns/coredns/plugin/pkg/fall"
 	"github.com/coredns/coredns/request"
 	"github.com/jinzhu/gorm"
 	"github.com/miekg/dns"
@@ -17,16 +20,45 @@ import (
 )
 
 const Name = "pdsql"
+const hostmaster = "hostmaster"
 
 type PowerDNSGenericSQLBackend struct {
 	*gorm.DB
-	Debug bool
-	Next  plugin.Handler
+	Debug   bool
+	Next    plugin.Handler
+	Fall    fall.F
+	Reverse bool
+	Zones   []string
 }
 
 func (pdb PowerDNSGenericSQLBackend) Name() string { return Name }
+
+// IsNameError implements the ServiceBackend interface.
+func (pdb PowerDNSGenericSQLBackend) IsNameError(err error) bool {
+	// return err == "record not found"
+	return false
+}
+
+// Lookup implements the ServiceBackend interface.
+func (pdb PowerDNSGenericSQLBackend) Lookup(ctx context.Context, state request.Request, name string, typ uint16) (*dns.Msg, error) {
+	// return e.Upstream.Lookup(ctx, state, name, typ)
+	return nil, nil
+}
+
+// MinTTL implements the ServiceBackend interface.
+func (pdb PowerDNSGenericSQLBackend) MinTTL(state request.Request) uint32 {
+	return 30
+}
+
+// Serial implements the ServiceBackend interface.
+func (pdb PowerDNSGenericSQLBackend) Serial(state request.Request) uint32 {
+	return uint32(time.Now().Unix())
+}
+
 func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	// opt := plugin.Options{}
 	state := request.Request{W: w, Req: r}
+	zone := plugin.Zones(pdb.Zones).Matches(state.Name())
 
 	a := new(dns.Msg)
 	a.SetReply(r)
@@ -65,6 +97,40 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 				return dns.RcodeServerFailure, err
 			}
 		}
+
+		// if you have Reverse set to true, search A records when PTR is requested
+		// an no PTR has been found yet
+		if len(records) == 0 && state.QType() == dns.TypePTR && pdb.Reverse {
+			var tmpRecords []*pdnsmodel.Record
+
+			qname := strings.TrimSuffix(state.QName(), ".")
+
+			if strings.HasSuffix(qname, ".in-addr.arpa") {
+				ipParts := strings.Split(state.QName(), ".")
+				if len(ipParts) >= 4 {
+					ip := fmt.Sprintf("%s.%s.%s.%s", ipParts[3], ipParts[2], ipParts[1], ipParts[0])
+					query := pdnsmodel.Record{Content: ip, Type: "A", Disabled: false}
+					if err := pdb.Where(query).Find(&tmpRecords).Error; err != nil {
+						if err == gorm.ErrRecordNotFound {
+							return dns.RcodeNameError, nil
+						}
+						return dns.RcodeServerFailure, err
+					}
+
+					// munge the A records so they look like PTR records and we can send them back
+					for _, v := range tmpRecords {
+						// set ID=0 in case we accidentally save these
+						v.ID = 0
+						hostname := v.Name
+						v.Name = state.QName()
+						v.Content = hostname
+						v.Type = "PTR"
+						records = append(records, v)
+					}
+				}
+			}
+		}
+
 		for _, v := range records {
 			typ := dns.StringToType[v.Type]
 			hrd := dns.RR_Header{Name: state.QName(), Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
@@ -154,12 +220,52 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		}
 	}
 	if len(a.Answer) == 0 {
-		return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
+		if pdb.Fall.Through(state.Name()) {
+			return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
+		} else {
+			// Return NXDOMAIN if fallthrough is not enabled
+			m := new(dns.Msg)
+			m.SetRcode(state.Req, dns.RcodeNameError)
+			m.Authoritative = true
+			// m.Ns, _ = SOA(ctx, b, zone, state, opt)
+			m.Ns, _ = soa_hack(pdb, zone, state)
+
+			state.W.WriteMsg(m)
+			// Return success as the rcode to signal we have written to the client.
+		}
+		// 						return dns.RcodeSuccess, err
+
+		// 	return plugin.BackendError(ctx, pdb, zone, dns.RcodeNameError, state, nil /* err */, opt)
+		// 	return dns.RcodeNameError, nil
+		// }
 	}
 
 	return 0, w.WriteMsg(a)
 }
 
+func soa_hack(pdb PowerDNSGenericSQLBackend, zone string, state request.Request) ([]dns.RR, error) {
+	minTTL := pdb.MinTTL(state)
+	ttl := uint32(300)
+	if minTTL < ttl {
+		ttl = minTTL
+	}
+
+	header := dns.RR_Header{Name: zone, Rrtype: dns.TypeSOA, Ttl: ttl, Class: dns.ClassINET}
+
+	Mbox := dnsutil.Join(hostmaster, zone)
+	Ns := dnsutil.Join("ns.dns", zone)
+
+	soa := &dns.SOA{Hdr: header,
+		Mbox:    Mbox,
+		Ns:      Ns,
+		Serial:  pdb.Serial(state),
+		Refresh: 7200,
+		Retry:   1800,
+		Expire:  86400,
+		Minttl:  minTTL,
+	}
+	return []dns.RR{soa}, nil
+}
 func (pdb PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) (redords []*pdnsmodel.Record, err error) {
 	// find domain, then find matched sub domain
 	name := qname

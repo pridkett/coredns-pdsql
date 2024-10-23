@@ -1,8 +1,9 @@
 package pdsql
 
 import (
-	"github.com/wenerme/coredns-pdsql/pdnsmodel"
 	"log"
+
+	"github.com/wenerme/coredns-pdsql/pdnsmodel"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -19,6 +20,8 @@ func init() {
 
 func setup(c *caddy.Controller) error {
 	backend := PowerDNSGenericSQLBackend{}
+	backend.Reverse = false
+
 	c.Next()
 	if !c.NextArg() {
 		return plugin.Error("pdsql", c.ArgErr())
@@ -35,6 +38,9 @@ func setup(c *caddy.Controller) error {
 		return err
 	}
 	backend.DB = db
+
+	// anythiung after the the connection string is the zones, defaults to `.`
+	backend.Zones = plugin.OriginsFromArgsOrServerBlock(c.RemainingArgs(), c.ServerBlockKeys)
 
 	for c.NextBlock() {
 		x := c.Val()
@@ -54,6 +60,10 @@ func setup(c *caddy.Controller) error {
 			if err := backend.AutoMigrate(); err != nil {
 				return err
 			}
+		case "fallthrough":
+			backend.Fall.SetZonesFromArgs(c.RemainingArgs())
+		case "reverse":
+			backend.Reverse = true
 		default:
 			return plugin.Error("pdsql", c.Errf("unexpected '%v' command", x))
 		}
