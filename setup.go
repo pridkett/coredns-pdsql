@@ -8,7 +8,10 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
-	"github.com/jinzhu/gorm"
+	"github.com/glebarez/sqlite" // use pure go implementation of sqlite driver
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func init() {
@@ -33,10 +36,25 @@ func setup(c *caddy.Controller) error {
 	}
 	arg := c.Val()
 
-	db, err := gorm.Open(dialect, arg)
+	var dialector gorm.Dialector
+	switch dialect {
+	case "mysql":
+		dialector = mysql.Open(arg)
+	case "postgres":
+		dialector = postgres.Open(arg)
+	case "sqlite3", "sqlite":
+		dialector = sqlite.Open(arg)
+
+	// Add other dialects as needed
+	default:
+		return plugin.Error("pdsql", c.Errf("unsupported dialect '%v'", dialect))
+	}
+
+	db, err := gorm.Open(dialector, &gorm.Config{})
 	if err != nil {
 		return err
 	}
+
 	backend.DB = db
 
 	// anythiung after the the connection string is the zones, defaults to `.`
@@ -84,5 +102,5 @@ func setup(c *caddy.Controller) error {
 }
 
 func (pdb PowerDNSGenericSQLBackend) AutoMigrate() error {
-	return pdb.DB.AutoMigrate(&pdnsmodel.Record{}, &pdnsmodel.Domain{}).Error
+	return pdb.DB.AutoMigrate(&pdnsmodel.Domain{}, &pdnsmodel.Record{})
 }
