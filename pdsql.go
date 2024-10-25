@@ -59,6 +59,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	// opt := plugin.Options{}
 	state := request.Request{W: w, Req: r}
 	zone := plugin.Zones(pdb.Zones).Matches(state.Name())
+	qname := strings.ToLower(state.QName())
 
 	a := new(dns.Msg)
 	a.SetReply(r)
@@ -66,7 +67,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	a.Authoritative = true
 
 	var records []*pdnsmodel.Record
-	query := pdnsmodel.Record{Name: state.QName(), Type: state.Type(), Disabled: false}
+	query := pdnsmodel.Record{Name: qname, Type: state.Type(), Disabled: false}
 	if query.Name != "." {
 		// remove last dot
 		query.Name = query.Name[:len(query.Name)-1]
@@ -77,6 +78,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		query.Type = ""
 	}
 
+	// fmt.Printf("state.QName()=%s qname=%s\n", state.QName(), qname)
 	if err := pdb.Where(query).Find(&records).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			query.Type = "SOA"
@@ -103,10 +105,10 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		if len(records) == 0 && state.QType() == dns.TypePTR && pdb.Reverse {
 			var tmpRecords []*pdnsmodel.Record
 
-			qname := strings.TrimSuffix(state.QName(), ".")
+			ipQname := strings.TrimSuffix(qname, ".")
 
-			if strings.HasSuffix(qname, ".in-addr.arpa") {
-				ipParts := strings.Split(state.QName(), ".")
+			if strings.HasSuffix(ipQname, ".in-addr.arpa") {
+				ipParts := strings.Split(ipQname, ".")
 				if len(ipParts) >= 4 {
 					ip := fmt.Sprintf("%s.%s.%s.%s", ipParts[3], ipParts[2], ipParts[1], ipParts[0])
 					query := pdnsmodel.Record{Content: ip, Type: "A", Disabled: false}
@@ -122,7 +124,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 						// set ID=0 in case we accidentally save these
 						v.ID = 0
 						hostname := v.Name
-						v.Name = state.QName()
+						v.Name = qname
 						v.Content = hostname
 						v.Type = "PTR"
 						records = append(records, v)
@@ -133,7 +135,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 
 		for _, v := range records {
 			typ := dns.StringToType[v.Type]
-			hrd := dns.RR_Header{Name: state.QName(), Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
+			hrd := dns.RR_Header{Name: qname, Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
 			if !strings.HasSuffix(hrd.Name, ".") {
 				hrd.Name += "."
 			}
@@ -269,7 +271,7 @@ func soa_hack(pdb PowerDNSGenericSQLBackend, zone string, state request.Request)
 func (pdb PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) (redords []*pdnsmodel.Record, err error) {
 	// find domain, then find matched sub domain
 	name := qname
-	qnameNoDot := qname[:len(qname)-1]
+	qnameNoDot := strings.ToLower(strings.TrimSuffix(qname, "."))
 	typ := dns.TypeToString[qtype]
 	name = qnameNoDot
 NEXT_ZONE:

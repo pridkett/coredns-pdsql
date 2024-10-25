@@ -11,9 +11,11 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/dnstest"
 	"github.com/coredns/coredns/plugin/test"
 
-	"github.com/jinzhu/gorm"
 	"github.com/miekg/dns"
 	"golang.org/x/net/context"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 type PowerDNSSQLTestCase struct {
@@ -27,12 +29,13 @@ type PowerDNSSQLTestCase struct {
 }
 
 func TestPowerDNSSQL(t *testing.T) {
-	db, err := gorm.Open("sqlite3", ":memory:")
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p := pdsql.PowerDNSGenericSQLBackend{DB: db.Debug()}
+	p := pdsql.PowerDNSGenericSQLBackend{DB: db.Debug(), Reverse: true}
 	if err := p.AutoMigrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +113,30 @@ func TestPowerDNSSQL(t *testing.T) {
 			expectedReply:  []string{"10 10 5269 example.org."},
 			rrReply:        []dns.RR{&dns.SRV{Target: "example.org.", Priority: 10, Weight: 10, Port: 5269}},
 		},
+		{
+			qname:          "eXamPlE.org.",
+			qtype:          dns.TypeA,
+			expectedCode:   dns.RcodeSuccess,
+			expectedHeader: []string{"example.org."},
+			expectedReply:  []string{"192.168.1.1"},
+			expectedErr:    nil,
+			rrReply:        []dns.RR{&dns.A{A: net.ParseIP("192.168.1.1")}},
+		},
+		{
+			qname:          "1.1.168.192.in-addr.arpa.",
+			qtype:          dns.TypePTR,
+			expectedCode:   dns.RcodeSuccess,
+			expectedHeader: []string{"1.1.168.192.in-addr.arpa."},
+			expectedReply:  []string{"example.org."},
+			expectedErr:    nil,
+			rrReply:        []dns.RR{&dns.PTR{Ptr: "example.org."}},
+		},
 	}
 
 	ctx := context.TODO()
 
 	for i, tc := range tests {
+		fmt.Printf("Running test %d\n", i)
 		req := new(dns.Msg)
 		req.SetQuestion(dns.Fqdn(tc.qname), tc.qtype)
 
@@ -142,57 +164,68 @@ func TestPowerDNSSQL(t *testing.T) {
 			}
 		}
 
-		for i, expected := range tc.expectedHeader {
-			actual := observed.Msg.Answer[i].Header().Name
+		for j, expected := range tc.expectedHeader {
+			if len(observed.Msg.Answer) <= j {
+				t.Errorf("Test %d: Expected %d answers in header, but got %d", i, len(tc.rrReply), len(observed.Msg.Answer))
+				continue
+			}
+
+			actual := observed.Msg.Answer[j].Header().Name
 			if actual != expected {
-				t.Errorf("Test %d: Expected answer %s, but got %s", i, expected, actual)
+				t.Errorf("Test %d: Expected answer %s in header %d, but got %s", i, expected, j, actual)
 			}
 
 		}
 
-		for i, testExpected := range tc.rrReply {
-			switch observed.Msg.Answer[i].(type) {
+		for j, testExpected := range tc.rrReply {
+
+			if len(observed.Msg.Answer) <= j {
+				t.Errorf("Test %d: Expected %d answers in reply, but got %d", i, len(tc.rrReply), len(observed.Msg.Answer))
+				continue
+			}
+
+			switch observed.Msg.Answer[j].(type) {
 			case *dns.A:
 				expectedRR := testExpected.(*dns.A)
-				observedRR := observed.Msg.Answer[i].(*dns.A)
+				observedRR := observed.Msg.Answer[j].(*dns.A)
 
 				if !expectedRR.A.Equal(observedRR.A) {
-					t.Errorf("Test %d: Expected A reply %s, but got %s", i, expectedRR.A, observedRR.A)
+					t.Errorf("Test %d: Expected A reply %s, but got %s", j, expectedRR.A, observedRR.A)
 				}
 
 			case *dns.CNAME:
 				expectedRR := testExpected.(*dns.CNAME)
-				observedRR := observed.Msg.Answer[i].(*dns.CNAME)
+				observedRR := observed.Msg.Answer[j].(*dns.CNAME)
 
 				if expectedRR.Target != observedRR.Target {
-					t.Errorf("Test %d: Expected CNAME reply %s, but got %s", i, expectedRR.Target, observedRR.Target)
+					t.Errorf("Test %d: Expected CNAME reply %s, but got %s", j, expectedRR.Target, observedRR.Target)
 				}
 
 			case *dns.TXT:
 				expectedRR := testExpected.(*dns.TXT)
-				observedRR := observed.Msg.Answer[i].(*dns.TXT)
+				observedRR := observed.Msg.Answer[j].(*dns.TXT)
 
 				if len(expectedRR.Txt) != len(observedRR.Txt) {
-					t.Errorf("Test %d: Expected TXT reply of length %d, but got length %d", i, len(expectedRR.Txt), len(observedRR.Txt))
+					t.Errorf("Test %d: Expected TXT reply of length %d, but got length %d", j, len(expectedRR.Txt), len(observedRR.Txt))
 				}
 				for ctr := range expectedRR.Txt {
 					if expectedRR.Txt[ctr] != observedRR.Txt[ctr] {
-						t.Errorf("Test %d: Expected TXT reply ctr=%d to be %s, but got %s", i, ctr, expectedRR.Txt[ctr], observedRR.Txt[ctr])
+						t.Errorf("Test %d: Expected TXT reply ctr=%d to be %s, but got %s", j, ctr, expectedRR.Txt[ctr], observedRR.Txt[ctr])
 					}
 				}
 
 			case *dns.MX:
 				expectedRR := testExpected.(*dns.MX)
-				observedRR := observed.Msg.Answer[i].(*dns.MX)
+				observedRR := observed.Msg.Answer[j].(*dns.MX)
 
 				if expectedRR.Mx != observedRR.Mx {
-					t.Errorf("Test %d: Expected MX reply %s, but got %s", i, expectedRR.Mx, observedRR.Mx)
+					t.Errorf("Test %d: Expected MX reply %s, but got %s", j, expectedRR.Mx, observedRR.Mx)
 					fmt.Printf("expected MX: %v\n", expectedRR.Mx)
 				}
 
 			case *dns.SRV:
 				expectedRR := testExpected.(*dns.SRV)
-				observedRR := observed.Msg.Answer[i].(*dns.SRV)
+				observedRR := observed.Msg.Answer[j].(*dns.SRV)
 
 				if (expectedRR.Target != observedRR.Target) ||
 					(expectedRR.Port != observedRR.Port) ||
@@ -202,7 +235,7 @@ func TestPowerDNSSQL(t *testing.T) {
 					t.Errorf(
 						"Test %d: Expected SRV reply target=%s, priority=%d, weight=%d, port=%d, "+
 							"but got target=%s, priority=%d, weight=%d, port=%d",
-						i, expectedRR.Target, expectedRR.Priority, expectedRR.Weight, expectedRR.Port,
+						j, expectedRR.Target, expectedRR.Priority, expectedRR.Weight, expectedRR.Port,
 						observedRR.Target, observedRR.Priority, observedRR.Weight, observedRR.Port,
 					)
 				}
