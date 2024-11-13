@@ -21,38 +21,86 @@ import (
 
 const Name = "pdsql"
 const hostmaster = "hostmaster"
+const defaultTtl = 360
 
 type PowerDNSGenericSQLBackend struct {
 	*gorm.DB
-	Debug   bool
-	Next    plugin.Handler
-	Fall    fall.F
-	Reverse bool
-	Zones   []string
+	Debug        bool
+	Next         plugin.Handler
+	Fall         fall.F
+	AllowReverse bool
+	Zones        []string
 }
 
-func (pdb PowerDNSGenericSQLBackend) Name() string { return Name }
-
-// IsNameError implements the ServiceBackend interface.
-func (pdb PowerDNSGenericSQLBackend) IsNameError(err error) bool {
-	// return err == "record not found"
-	return false
-}
-
-// Lookup implements the ServiceBackend interface.
-func (pdb PowerDNSGenericSQLBackend) Lookup(ctx context.Context, state request.Request, name string, typ uint16) (*dns.Msg, error) {
-	// return e.Upstream.Lookup(ctx, state, name, typ)
-	return nil, nil
-}
-
-// MinTTL implements the ServiceBackend interface.
-func (pdb PowerDNSGenericSQLBackend) MinTTL(state request.Request) uint32 {
-	return 30
-}
-
-// Serial implements the ServiceBackend interface.
 func (pdb PowerDNSGenericSQLBackend) Serial(state request.Request) uint32 {
 	return uint32(time.Now().Unix())
+}
+
+func (pdb PowerDNSGenericSQLBackend) MinTtl(state request.Request) uint32 {
+	// if pdb.Ttl == 0 {
+	return defaultTtl
+	// }
+	// return pdb.Ttl
+}
+
+func (pdb PowerDNSGenericSQLBackend) findRecord(name string, types ...string) ([]*pdnsmodel.Record, error) {
+	var records []*pdnsmodel.Record
+	var appendRecords []*pdnsmodel.Record
+	var cnameTypes []string
+
+	name = strings.TrimSuffix(name, ".")
+
+	query := pdb.DB.Where("name = ? AND disabled = ?", name, false)
+
+	// Filter out empty strings from types
+	filteredTypes := make([]string, 0, len(types))
+	cnameFound := false
+	for _, t := range types {
+		if t != "" {
+			filteredTypes = append(filteredTypes, t)
+		}
+		if t == "A" || t == "AAAA" {
+			cnameTypes = append(cnameTypes, t)
+		}
+		if t == "CNAME" {
+			cnameFound = true
+		}
+	}
+
+	if len(cnameTypes) > 0 {
+		cnameTypes = append(cnameTypes, "CNAME")
+		if !cnameFound {
+			filteredTypes = append(filteredTypes, "CNAME")
+		}
+	}
+
+	// Add the IN clause only if filteredTypes is not empty
+	if len(filteredTypes) > 0 {
+		query = query.Where("type IN (?)", filteredTypes)
+	}
+
+	err := query.Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have a CNAME, we need to recurse to get the A/AAAA record.
+	// But, we only do this if the query was not just for the CNAME
+	if len(cnameTypes) > 0 {
+		for _, v := range records {
+			if v.Type == "CNAME" {
+				newRecords, err := pdb.findRecord(v.Content, cnameTypes...)
+				if err != nil {
+					if err != gorm.ErrRecordNotFound {
+						return nil, err
+					}
+				}
+				appendRecords = append(appendRecords, newRecords...)
+			}
+		}
+	}
+
+	return append(records, appendRecords...), nil
 }
 
 func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -67,22 +115,17 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	a.Authoritative = true
 
 	var records []*pdnsmodel.Record
-	query := pdnsmodel.Record{Name: qname, Type: state.Type(), Disabled: false}
-	if query.Name != "." {
-		// remove last dot
-		query.Name = query.Name[:len(query.Name)-1]
+
+	queryType := state.Type()
+	if state.QType() == dns.TypeANY {
+		queryType = ""
 	}
 
-	switch state.QType() {
-	case dns.TypeANY:
-		query.Type = ""
-	}
-
-	// fmt.Printf("state.QName()=%s qname=%s\n", state.QName(), qname)
-	if err := pdb.Where(query).Find(&records).Error; err != nil {
+	records, err := pdb.findRecord(qname, queryType)
+	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			query.Type = "SOA"
-			if pdb.Where(query).Find(&records).Error == nil {
+			records, err = pdb.findRecord(qname, "SOA")
+			if err == nil && len(records) > 0 {
 				rr := new(dns.SOA)
 				rr.Hdr = dns.RR_Header{Name: state.QName(), Rrtype: dns.TypeSOA, Class: state.QClass()}
 				if ParseSOA(rr, records[0].Content) {
@@ -93,16 +136,9 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			return dns.RcodeServerFailure, err
 		}
 	} else {
-		if len(records) == 0 {
-			records, err = pdb.SearchWildcard(state.QName(), state.QType())
-			if err != nil {
-				return dns.RcodeServerFailure, err
-			}
-		}
-
-		// if you have Reverse set to true, search A records when PTR is requested
-		// an no PTR has been found yet
-		if len(records) == 0 && state.QType() == dns.TypePTR && pdb.Reverse {
+		if len(records) == 0 && state.QType() == dns.TypePTR && pdb.AllowReverse {
+			// if you have Reverse set to true, search A records when PTR is requested
+			// an no PTR has been found yet
 			var tmpRecords []*pdnsmodel.Record
 
 			ipQname := strings.TrimSuffix(qname, ".")
@@ -130,6 +166,14 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 						records = append(records, v)
 					}
 				}
+			}
+		}
+
+		// if we still have no records, and the query is for an A or AAAA record, check for a wildcard
+		if len(records) == 0 {
+			records, err = pdb.SearchWildcard(state.QName(), state.QType())
+			if err != nil {
+				return dns.RcodeServerFailure, err
 			}
 		}
 
@@ -221,6 +265,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			}
 		}
 	}
+
 	if len(a.Answer) == 0 {
 		if pdb.Fall.Through(state.Name()) {
 			return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
@@ -232,27 +277,18 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			// m.Ns, _ = SOA(ctx, b, zone, state, opt)
 			m.Ns, _ = soa_hack(pdb, zone, state)
 
-			state.W.WriteMsg(m)
-			// Return success as the rcode to signal we have written to the client.
+			// state.W.WriteMsg(m)
+			return 0, w.WriteMsg(m)
 		}
-		// 						return dns.RcodeSuccess, err
-
-		// 	return plugin.BackendError(ctx, pdb, zone, dns.RcodeNameError, state, nil /* err */, opt)
-		// 	return dns.RcodeNameError, nil
-		// }
 	}
 
 	return 0, w.WriteMsg(a)
 }
 
 func soa_hack(pdb PowerDNSGenericSQLBackend, zone string, state request.Request) ([]dns.RR, error) {
-	minTTL := pdb.MinTTL(state)
-	ttl := uint32(300)
-	if minTTL < ttl {
-		ttl = minTTL
-	}
+	minTtl := pdb.MinTtl(state)
 
-	header := dns.RR_Header{Name: zone, Rrtype: dns.TypeSOA, Ttl: ttl, Class: dns.ClassINET}
+	header := dns.RR_Header{Name: zone, Rrtype: dns.TypeSOA, Ttl: minTtl, Class: dns.ClassINET}
 
 	Mbox := dnsutil.Join(hostmaster, zone)
 	Ns := dnsutil.Join("ns.dns", zone)
@@ -264,10 +300,11 @@ func soa_hack(pdb PowerDNSGenericSQLBackend, zone string, state request.Request)
 		Refresh: 7200,
 		Retry:   1800,
 		Expire:  86400,
-		Minttl:  minTTL,
+		Minttl:  minTtl,
 	}
 	return []dns.RR{soa}, nil
 }
+
 func (pdb PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) (redords []*pdnsmodel.Record, err error) {
 	// find domain, then find matched sub domain
 	name := qname

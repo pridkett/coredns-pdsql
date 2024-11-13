@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const Default_TTL = 3600
+
 func init() {
 	caddy.RegisterPlugin("pdsql", caddy.Plugin{
 		ServerType: "dns",
@@ -23,7 +25,7 @@ func init() {
 
 func setup(c *caddy.Controller) error {
 	backend := PowerDNSGenericSQLBackend{}
-	backend.Reverse = false
+	backend.AllowReverse = false
 
 	c.Next()
 	if !c.NextArg() {
@@ -81,7 +83,7 @@ func setup(c *caddy.Controller) error {
 		case "fallthrough":
 			backend.Fall.SetZonesFromArgs(c.RemainingArgs())
 		case "reverse":
-			backend.Reverse = true
+			backend.AllowReverse = true
 		default:
 			return plugin.Error("pdsql", c.Errf("unexpected '%v' command", x))
 		}
