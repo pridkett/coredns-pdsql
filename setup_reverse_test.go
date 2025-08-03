@@ -8,26 +8,29 @@ import (
 
 func TestSetupReverse(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		expectedError bool
-		expectReverse bool
+		name               string
+		input              string
+		expectedError      bool
+		expectReverse      bool
+		expectFirstOnly    bool
 	}{
 		{
 			name: "reverse option enabled",
 			input: `pdsql sqlite3 ":memory:" {
 				reverse
 			}`,
-			expectedError: false,
-			expectReverse: true,
+			expectedError:   false,
+			expectReverse:   true,
+			expectFirstOnly: false,
 		},
 		{
 			name: "reverse option not specified",
 			input: `pdsql sqlite3 ":memory:" {
 				debug db
 			}`,
-			expectedError: false,
-			expectReverse: false,
+			expectedError:   false,
+			expectReverse:   false,
+			expectFirstOnly: false,
 		},
 		{
 			name: "reverse with other options",
@@ -36,28 +39,50 @@ func TestSetupReverse(t *testing.T) {
 				reverse
 				debug requests
 			}`,
-			expectedError: false,
-			expectReverse: true,
+			expectedError:   false,
+			expectReverse:   true,
+			expectFirstOnly: false,
 		},
 		{
-			name:          "empty config block",
-			input:         `pdsql sqlite3 ":memory:" { }`,
-			expectedError: false,
-			expectReverse: false,
+			name:            "empty config block",
+			input:           `pdsql sqlite3 ":memory:" { }`,
+			expectedError:   false,
+			expectReverse:   false,
+			expectFirstOnly: false,
 		},
 		{
-			name:          "no config block",
-			input:         `pdsql sqlite3 ":memory:"`,
-			expectedError: false,
-			expectReverse: false,
+			name:            "no config block",
+			input:           `pdsql sqlite3 ":memory:"`,
+			expectedError:   false,
+			expectReverse:   false,
+			expectFirstOnly: false,
 		},
 		{
-			name: "reverse option with argument should fail",
+			name: "reverse option with firstonly",
 			input: `pdsql sqlite3 ":memory:" {
-				reverse true
+				reverse firstonly
 			}`,
-			expectedError: true,
-			expectReverse: false,
+			expectedError:   false,
+			expectReverse:   true,
+			expectFirstOnly: true,
+		},
+		{
+			name: "reverse option with invalid argument",
+			input: `pdsql sqlite3 ":memory:" {
+				reverse invalid
+			}`,
+			expectedError:   true,
+			expectReverse:   false,
+			expectFirstOnly: false,
+		},
+		{
+			name: "reverse option with multiple arguments should fail",
+			input: `pdsql sqlite3 ":memory:" {
+				reverse firstonly extra
+			}`,
+			expectedError:   true,
+			expectReverse:   false,
+			expectFirstOnly: false,
 		},
 	}
 
@@ -85,6 +110,11 @@ func TestSetupReverse(t *testing.T) {
 			// Check if the Reverse field is set correctly
 			if backend.Reverse != tt.expectReverse {
 				t.Errorf("Expected Reverse to be %v, got %v", tt.expectReverse, backend.Reverse)
+			}
+
+			// Check if the ReverseFirstOnly field is set correctly
+			if backend.ReverseFirstOnly != tt.expectFirstOnly {
+				t.Errorf("Expected ReverseFirstOnly to be %v, got %v", tt.expectFirstOnly, backend.ReverseFirstOnly)
 			}
 		})
 	}

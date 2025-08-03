@@ -39,7 +39,7 @@ pdsql <dialect> <arg> {
     # create table for test
     auto-migrate
     # enable reverse DNS lookups (PTR records)
-    reverse
+    reverse [firstonly]
 }
 ~~~
 
@@ -138,11 +138,22 @@ example.com:53 {
 }
 ~~~
 
+You can also use the `firstonly` option to return only the first matching PTR record when multiple hostnames point to the same IP address:
+
+~~~ corefile
+example.com:53 {
+    pdsql sqlite3 ./dns.db {
+        reverse firstonly
+    }
+}
+~~~
+
 Example data:
 
 ~~~ bash
-# Insert an A record
+# Insert A records
 sqlite3 ./dns.db 'insert into records(name,type,content,ttl,disabled)values("host.example.com","A","192.168.1.10",3600,0)'
+sqlite3 ./dns.db 'insert into records(name,type,content,ttl,disabled)values("alias.example.com","A","192.168.1.10",3600,0)'
 ~~~
 
 When queried for "10.1.168.192.in-addr.arpa. PTR", CoreDNS will respond with:
@@ -155,11 +166,14 @@ When queried for "10.1.168.192.in-addr.arpa. PTR", CoreDNS will respond with:
 10.1.168.192.in-addr.arpa.	3600	IN	PTR	host.example.com.
 ~~~
 
+If `firstonly` is not set, both PTR records would be returned.
+
 The reverse DNS feature:
 - Parses PTR queries in the format `*.in-addr.arpa`
 - Extracts the IP address from the query name
 - Searches for A records with matching IP addresses
 - Returns PTR records pointing to the hostnames
+- With `firstonly` option, returns only the first matching record
 
 ### Wildcard
 

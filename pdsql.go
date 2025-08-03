@@ -20,9 +20,10 @@ const Name = "pdsql"
 
 type PowerDNSGenericSQLBackend struct {
 	*gorm.DB
-	Debug   bool
-	Reverse bool
-	Next    plugin.Handler
+	Debug            bool
+	Reverse          bool
+	ReverseFirstOnly bool
+	Next             plugin.Handler
 }
 
 func (pdb PowerDNSGenericSQLBackend) Name() string { return Name }
@@ -347,6 +348,11 @@ func (pdb *PowerDNSGenericSQLBackend) ResolveReverseDNS(ip net.IP) ([]*pdnsmodel
 		Where("type = ?", "A").
 		Where("content = ?", ipStr).
 		Where("disabled = ?", false)
+	
+	// Apply limit if firstonly is enabled
+	if pdb.ReverseFirstOnly {
+		query = query.Limit(1)
+	}
 	
 	if err := query.Find(&records).Error; err != nil {
 		return nil, err

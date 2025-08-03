@@ -95,11 +95,21 @@ func ParseConfig(c *caddy.Controller) (*PowerDNSGenericSQLBackend, error) {
 				return nil, err
 			}
 		case "reverse":
-			if len(c.RemainingArgs()) > 0 {
-				return nil, plugin.Error("pdsql", c.Errf("reverse option takes no arguments"))
+			args := c.RemainingArgs()
+			if len(args) > 1 {
+				return nil, plugin.Error("pdsql", c.Errf("reverse option takes at most one argument: firstonly"))
 			}
 			backend.Reverse = true
-			log.Println(Name, "reverse DNS lookups enabled")
+			if len(args) == 1 {
+				if args[0] == "firstonly" {
+					backend.ReverseFirstOnly = true
+					log.Println(Name, "reverse DNS lookups enabled with firstonly option")
+				} else {
+					return nil, plugin.Error("pdsql", c.Errf("invalid reverse option argument: %s (expected 'firstonly')", args[0]))
+				}
+			} else {
+				log.Println(Name, "reverse DNS lookups enabled")
+			}
 		case "driver": // todo
 		case "dialect": // todo
 		case "dsn": // todo

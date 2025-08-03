@@ -163,6 +163,109 @@ func TestResolveReverseDNS(t *testing.T) {
 	}
 }
 
+func TestResolveReverseDNSWithFirstOnly(t *testing.T) {
+	// Setup test database
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create tables
+	db.AutoMigrate(&pdnsmodel.Domain{}, &pdnsmodel.Record{})
+
+	// Insert test data
+	domain := pdnsmodel.Domain{
+		ID:   1,
+		Name: "example.com",
+		Type: "NATIVE",
+	}
+	db.Create(&domain)
+
+	// Create multiple A records for the same IP
+	testRecords := []pdnsmodel.Record{
+		{
+			DomainId: 1,
+			Name:     "host1.example.com",
+			Type:     "A",
+			Content:  "192.168.1.1",
+			Ttl:      300,
+			Disabled: false,
+		},
+		{
+			DomainId: 1,
+			Name:     "host2.example.com",
+			Type:     "A",
+			Content:  "192.168.1.1",
+			Ttl:      300,
+			Disabled: false,
+		},
+		{
+			DomainId: 1,
+			Name:     "host3.example.com",
+			Type:     "A",
+			Content:  "192.168.1.1",
+			Ttl:      300,
+			Disabled: false,
+		},
+	}
+
+	for _, r := range testRecords {
+		db.Create(&r)
+	}
+
+	tests := []struct {
+		name              string
+		ip                string
+		reverseFirstOnly  bool
+		expectedRecordCount int
+	}{
+		{
+			name:              "firstonly disabled - returns all records",
+			ip:                "192.168.1.1",
+			reverseFirstOnly:  false,
+			expectedRecordCount: 3,
+		},
+		{
+			name:              "firstonly enabled - returns only one record",
+			ip:                "192.168.1.1",
+			reverseFirstOnly:  true,
+			expectedRecordCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &pdsql.PowerDNSGenericSQLBackend{
+				DB:               db,
+				Debug:            false,
+				Reverse:          true,
+				ReverseFirstOnly: tt.reverseFirstOnly,
+			}
+
+			ip := net.ParseIP(tt.ip)
+			if ip == nil {
+				t.Fatalf("Invalid IP address: %s", tt.ip)
+			}
+
+			records, err := backend.ResolveReverseDNS(ip)
+			if err != nil {
+				t.Fatalf("ResolveReverseDNS() error = %v", err)
+			}
+
+			if len(records) != tt.expectedRecordCount {
+				t.Errorf("ResolveReverseDNS() returned %d records, want %d", len(records), tt.expectedRecordCount)
+			}
+
+			// Verify all returned records are PTR type
+			for _, record := range records {
+				if record.Type != "PTR" {
+					t.Errorf("Expected PTR record, got %s", record.Type)
+				}
+			}
+		})
+	}
+}
+
 func TestServeDNSWithReverseDNS(t *testing.T) {
 	// Setup test database
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
