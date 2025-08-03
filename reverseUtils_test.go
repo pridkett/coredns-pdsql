@@ -73,8 +73,44 @@ func TestParseReverseDNS(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			name:     "IPv6 reverse DNS - not implemented",
+			name:     "valid IPv6 reverse DNS",
 			qname:    "b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+			expected: "2001:db8::567:89ab",
+			wantErr:  false,
+		},
+		{
+			name:     "valid IPv6 reverse DNS with trailing dot",
+			qname:    "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+			expected: "2001:db8::1",
+			wantErr:  false,
+		},
+		{
+			name:     "IPv6 localhost reverse",
+			qname:    "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa",
+			expected: "::1",
+			wantErr:  false,
+		},
+		{
+			name:     "IPv6 reverse DNS - too few nibbles",
+			qname:    "b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.ip6.arpa",
+			expected: "",
+			wantErr:  true,
+		},
+		{
+			name:     "IPv6 reverse DNS - too many nibbles",
+			qname:    "0.b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+			expected: "",
+			wantErr:  true,
+		},
+		{
+			name:     "IPv6 reverse DNS - invalid hex digit",
+			qname:    "g.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+			expected: "",
+			wantErr:  true,
+		},
+		{
+			name:     "IPv6 reverse DNS - multi-character nibble",
+			qname:    "ba.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
 			expected: "",
 			wantErr:  true,
 		},
@@ -222,9 +258,29 @@ func TestGeneratePTRName(t *testing.T) {
 			expected: "0.0.0.0.in-addr.arpa",
 		},
 		{
-			name:     "IPv6 - not implemented",
+			name:     "IPv6 2001:db8::1",
 			ip:       net.ParseIP("2001:db8::1"),
-			expected: "",
+			expected: "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+		},
+		{
+			name:     "IPv6 2001:db8::567:89ab",
+			ip:       net.ParseIP("2001:db8::567:89ab"),
+			expected: "b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+		},
+		{
+			name:     "IPv6 ::1 (localhost)",
+			ip:       net.ParseIP("::1"),
+			expected: "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa",
+		},
+		{
+			name:     "IPv6 full address",
+			ip:       net.ParseIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
+			expected: "4.3.3.7.0.7.3.0.e.2.a.8.0.0.0.0.0.0.0.0.3.a.5.8.8.b.d.0.1.0.0.2.ip6.arpa",
+		},
+		{
+			name:     "IPv6 with zeros",
+			ip:       net.ParseIP("fe80::1"),
+			expected: "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa",
 		},
 	}
 
