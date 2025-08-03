@@ -21,15 +21,32 @@ func init() {
 }
 
 func setup(c *caddy.Controller) error {
-	backend := PowerDNSGenericSQLBackend{}
+	backend, err := ParseConfig(c)
+	if err != nil {
+		return err
+	}
+
+	dnsserver.
+		GetConfig(c).
+		AddPlugin(func(next plugin.Handler) plugin.Handler {
+			backend.Next = next
+			return backend
+		})
+
+	return nil
+}
+
+// ParseConfig parses the configuration for the pdsql plugin
+func ParseConfig(c *caddy.Controller) (*PowerDNSGenericSQLBackend, error) {
+	backend := &PowerDNSGenericSQLBackend{}
 	c.Next()
 	if !c.NextArg() {
-		return plugin.Error("pdsql", c.ArgErr())
+		return nil, plugin.Error("pdsql", c.ArgErr())
 	}
 	dialect := c.Val()
 
 	if !c.NextArg() {
-		return plugin.Error("pdsql", c.ArgErr())
+		return nil, plugin.Error("pdsql", c.ArgErr())
 	}
 	arg := c.Val()
 
@@ -50,12 +67,12 @@ func setup(c *caddy.Controller) error {
 	case "mysql":
 		dialector = mysql.Open(arg)
 	default:
-		return plugin.Error("pdsql", c.Errf("unsupported dialect %v", dialect))
+		return nil, plugin.Error("pdsql", c.Errf("unsupported dialect %v", dialect))
 	}
 
 	db, err := gorm.Open(dialector)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	backend.DB = db
 
@@ -75,28 +92,27 @@ func setup(c *caddy.Controller) error {
 		case "auto-migrate":
 			// currently only use records table
 			if err := backend.AutoMigrate(); err != nil {
-				return err
+				return nil, err
 			}
+		case "reverse":
+			if len(c.RemainingArgs()) > 0 {
+				return nil, plugin.Error("pdsql", c.Errf("reverse option takes no arguments"))
+			}
+			backend.Reverse = true
+			log.Println(Name, "reverse DNS lookups enabled")
 		case "driver": // todo
 		case "dialect": // todo
 		case "dsn": // todo
 		default:
-			return plugin.Error("pdsql", c.Errf("unexpected '%v' command", x))
+			return nil, plugin.Error("pdsql", c.Errf("unexpected '%v' command", x))
 		}
 	}
 
 	if c.NextArg() {
-		return plugin.Error("pdsql", c.ArgErr())
+		return nil, plugin.Error("pdsql", c.ArgErr())
 	}
 
-	dnsserver.
-		GetConfig(c).
-		AddPlugin(func(next plugin.Handler) plugin.Handler {
-			backend.Next = next
-			return backend
-		})
-
-	return nil
+	return backend, nil
 }
 
 func (pdb PowerDNSGenericSQLBackend) AutoMigrate() error {

@@ -82,8 +82,9 @@ func TestResolveReverseDNS(t *testing.T) {
 	}
 
 	backend := &pdsql.PowerDNSGenericSQLBackend{
-		DB:    db,
-		Debug: false,
+		DB:      db,
+		Debug:   false,
+		Reverse: true,
 	}
 
 	tests := []struct {
@@ -269,8 +270,10 @@ func TestServeDNSWithReverseDNS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &pdsql.PowerDNSGenericSQLBackend{
-				DB:    db,
-				Debug: false,
+				DB:      db,
+				Debug:   false,
+				Reverse: tt.reverseEnabled,
+				Next:    test.NextHandler(dns.RcodeNameError, nil),
 			}
 
 			m := new(dns.Msg)
@@ -279,12 +282,19 @@ func TestServeDNSWithReverseDNS(t *testing.T) {
 			rec := dnstest.NewRecorder(&test.ResponseWriter{})
 			code, err := backend.ServeDNS(context.Background(), rec, m)
 
-			if err != nil && code != dns.RcodeNameError {
+			if err != nil && code != dns.RcodeNameError && code != dns.RcodeServerFailure {
 				t.Fatalf("ServeDNS() error = %v", err)
 			}
 
 			if code != tt.expectedRcode {
 				t.Errorf("ServeDNS() code = %v, want %v", code, tt.expectedRcode)
+			}
+
+			if rec.Msg == nil {
+				if tt.expectedAnswer > 0 {
+					t.Errorf("Expected %d answers, but response message is nil", tt.expectedAnswer)
+				}
+				return
 			}
 
 			if len(rec.Msg.Answer) != tt.expectedAnswer {

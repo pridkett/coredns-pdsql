@@ -15,7 +15,7 @@ func TestSetupReverse(t *testing.T) {
 	}{
 		{
 			name: "reverse option enabled",
-			input: `pdsql postgres "host=localhost dbname=test" {
+			input: `pdsql sqlite3 ":memory:" {
 				reverse
 			}`,
 			expectedError: false,
@@ -23,7 +23,7 @@ func TestSetupReverse(t *testing.T) {
 		},
 		{
 			name: "reverse option not specified",
-			input: `pdsql postgres "host=localhost dbname=test" {
+			input: `pdsql sqlite3 ":memory:" {
 				debug db
 			}`,
 			expectedError: false,
@@ -31,7 +31,7 @@ func TestSetupReverse(t *testing.T) {
 		},
 		{
 			name: "reverse with other options",
-			input: `pdsql postgres "host=localhost dbname=test" {
+			input: `pdsql sqlite3 ":memory:" {
 				debug db
 				reverse
 				debug requests
@@ -41,19 +41,19 @@ func TestSetupReverse(t *testing.T) {
 		},
 		{
 			name:          "empty config block",
-			input:         `pdsql postgres "host=localhost dbname=test" {}`,
+			input:         `pdsql sqlite3 ":memory:" { }`,
 			expectedError: false,
 			expectReverse: false,
 		},
 		{
 			name:          "no config block",
-			input:         `pdsql postgres "host=localhost dbname=test"`,
+			input:         `pdsql sqlite3 ":memory:"`,
 			expectedError: false,
 			expectReverse: false,
 		},
 		{
 			name: "reverse option with argument should fail",
-			input: `pdsql postgres "host=localhost dbname=test" {
+			input: `pdsql sqlite3 ":memory:" {
 				reverse true
 			}`,
 			expectedError: true,
