@@ -159,7 +159,11 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			} else {
 				return dns.RcodeServerFailure, fmt.Errorf("invalid SRV port: %s", parts[2])
 			}
-			rr.Target = parts[3]
+			if strings.HasSuffix(parts[3], ".") {
+				rr.Target = parts[3]
+			} else {
+				rr.Target = parts[3] + "."
+			}
 		default:
 			// drop unsupported
 		}
