@@ -64,6 +64,7 @@ func TestPowerDNSSQL(t *testing.T) {
 		{Name: "example.org", DomainId: testDomains["example.org"].ID, Type: "MX", Content: "20 mail2.example.org", Ttl: 3600},
 		{Name: "example.org", DomainId: testDomains["example.org"].ID, Type: "MX", Content: "mail3.example.org", Prio: 30, Ttl: 3600},
 		{Name: "_xmpp._tcp.example.org", DomainId: testDomains["example.org"].ID, Type: "SRV", Content: "10 10 5269 example.org.", Ttl: 3600},
+		{Name: "_minecraft._tcp.example.org", DomainId: testDomains["example.org"].ID, Type: "SRV", Content: "0 5 25566 docker-services.example.org", Ttl: 3600},
 	}
 
 	for _, r := range testRecords {
@@ -224,6 +225,17 @@ func TestPowerDNSSQL(t *testing.T) {
 			expectedHeader: []string{"_xmpp._tcp.example.org."},
 			expectedReply:  []string{"10 10 5269 example.org."},
 			rrReply:        []dns.RR{&dns.SRV{Target: "example.org.", Priority: 10, Weight: 10, Port: 5269}},
+		},
+		{
+			testName:       "Type SRV Request (target without trailing dot)",
+			qname:          "_minecraft._tcp.example.org.",
+			qtype:          dns.TypeSRV,
+			expectedCode:   dns.RcodeSuccess,
+			expectedType:   []uint16{dns.TypeSRV},
+			expectedErr:    nil,
+			expectedHeader: []string{"_minecraft._tcp.example.org."},
+			expectedReply:  []string{"0 5 25566 docker-services.example.org."},
+			rrReply:        []dns.RR{&dns.SRV{Target: "docker-services.example.org.", Priority: 0, Weight: 5, Port: 25566}},
 		},
 	}
 
