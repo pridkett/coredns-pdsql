@@ -20,8 +20,10 @@ const Name = "pdsql"
 
 type PowerDNSGenericSQLBackend struct {
 	*gorm.DB
-	Debug bool
-	Next  plugin.Handler
+	Debug            bool
+	Reverse          bool
+	ReverseFirstOnly bool
+	Next             plugin.Handler
 }
 
 func (pdb PowerDNSGenericSQLBackend) Name() string { return Name }
@@ -32,7 +34,26 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	a.Compress = true
 	a.Authoritative = true
 
-	records, err := pdb.ResolveRequest(state.QName(), state.QType())
+	var records []*pdnsmodel.Record
+	var err error
+
+	// Check if reverse DNS is enabled and this is a PTR query
+	if pdb.Reverse && state.QType() == dns.TypePTR && IsReverseDNSQuery(state.QName()) {
+		// Handle reverse DNS lookup
+		ip, parseErr := ParseReverseDNS(state.QName())
+		if parseErr != nil {
+			// Log error but continue to next plugin
+			if pdb.Debug {
+				fmt.Printf("pdsql - reverse DNS parse error: %v\n", parseErr)
+			}
+			return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
+		}
+		
+		records, err = pdb.ResolveReverseDNS(ip)
+	} else {
+		// Regular forward lookup
+		records, err = pdb.ResolveRequest(state.QName(), state.QType())
+	}
 
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -323,6 +344,43 @@ func (pdb *PowerDNSGenericSQLBackend) ResolveCNAMEs(cname string, qtype uint16) 
 	}
 
 	return cnameRecords, err
+}
+
+// ResolveReverseDNS performs a reverse DNS lookup
+func (pdb *PowerDNSGenericSQLBackend) ResolveReverseDNS(ip net.IP) ([]*pdnsmodel.Record, error) {
+	ipStr := ip.String()
+	
+	var records []pdnsmodel.Record
+	query := pdb.Model(&pdnsmodel.Record{}).
+		Where("type = ?", "A").
+		Where("content = ?", ipStr).
+		Where("disabled = ?", false)
+	
+	// Apply limit if firstonly is enabled
+	if pdb.ReverseFirstOnly {
+		query = query.Limit(1)
+	}
+	
+	if err := query.Find(&records).Error; err != nil {
+		return nil, err
+	}
+	
+	// Convert A records to PTR records
+	var ptrRecords []*pdnsmodel.Record
+	for i := range records {
+		ptrRecord := &pdnsmodel.Record{
+			ID:       records[i].ID,
+			DomainId: records[i].DomainId,
+			Name:     generatePTRName(ip),
+			Type:     "PTR",
+			Content:  records[i].Name,
+			Ttl:      records[i].Ttl,
+			Disabled: false,
+		}
+		ptrRecords = append(ptrRecords, ptrRecord)
+	}
+	
+	return ptrRecords, nil
 }
 
 func (pdb *PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) ([]*pdnsmodel.Record, error) {
