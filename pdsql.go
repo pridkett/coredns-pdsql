@@ -179,7 +179,10 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
 	}
 
-	return 0, w.WriteMsg(a)
+	if err := w.WriteMsg(a); err != nil {
+		return dns.RcodeServerFailure, err
+	}
+	return dns.RcodeSuccess, nil
 }
 
 func (pdb *PowerDNSGenericSQLBackend) ResolveRequest(qname string, qtype uint16) ([]*pdnsmodel.Record, error) {
